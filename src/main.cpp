@@ -53,16 +53,14 @@ void *map_function(void *args) {
 			pthread_exit(NULL);
 		}
 
-		// Verificăm dacă mai sunt fișiere de procesat
 		if (*thread_args->file_index >= thread_args->files.size()) {
 			pthread_mutex_unlock(thread_args->mutex);
 			break;
 		}
 
-		// Luăm fișierul și actualizăm indexul
 		int curr_file = *thread_args->file_index + 1;
 		string file = thread_args->files[*thread_args->file_index];
-		(*thread_args->file_index)++;  // Incrementăm indexul
+		(*thread_args->file_index)++;
 
 		// pthread_mutex_unlock(thread_args->mutex);
 
@@ -72,7 +70,6 @@ void *map_function(void *args) {
 		// f.open(filename.c_str());
 
 	
-		// Afișăm fișierul procesat de thread
 		cout << "Thread " << thread_args->thread_id << " processing file: " << file 
 			 << " (file index: " << *thread_args->file_index << ")" << endl;
 
@@ -102,7 +99,7 @@ void *map_function(void *args) {
 		thread_args->partial_maps->push_back(partial_map);
 		fin.close();
 
-		pthread_mutex_unlock(thread_args->mutex); // Deblocăm mutex-ul
+		pthread_mutex_unlock(thread_args->mutex);
 
 	}
 
@@ -122,11 +119,11 @@ int main(int argc, char **argv)
 	parse_input(argv, mappers, reducers, files, num_files);
 	
 	
-	pthread_t *threads = new pthread_t[mappers];  // Array for mappers threads
+	pthread_t *threads = new pthread_t[mappers];
 	thread_args_t *thread_args = new thread_args_t[mappers];
 
 	pthread_mutex_t mutex;
-	pthread_mutex_init(&mutex, NULL);  // Initialize the mutex
+	pthread_mutex_init(&mutex, NULL);
 
 	int file_index = 0;  // Shared file index among threads
 	vector<unordered_map<string, int>> maps;
