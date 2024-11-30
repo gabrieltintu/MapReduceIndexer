@@ -6,6 +6,7 @@
 #include "pthread_barrier_mac.h"
 #include <pthread.h>
 #include <unordered_map>
+#include <map>
 #include <algorithm>
 #include <cmath>
 
@@ -18,7 +19,7 @@ struct thread_args_t {
 	vector<unordered_map<string, int>>* partial_maps;
 	pthread_mutex_t *mutex;
 	pthread_barrier_t *barrier;
-	unordered_map<string, set<int>>* final_map;
+	map<string, set<int>>* final_map;
 	int *file_index;
 	int thread_id;
 };
@@ -88,8 +89,8 @@ void *map_function(void *args) {
 				c = tolower(c);
 
 			word.erase(remove_if(word.begin(), word.end(),
-                             [&str](char c) {
-                                 return str.find(c) != string::npos;
+                             [](char c) {
+                                 return !isalpha(c);
                              }),
                    word.end());
 			// cout << word << endl;
@@ -175,9 +176,12 @@ void *func(void *args) {
 }
 
 bool compare_by_size(pair<string, set<int>> a, pair<string, set<int>> b) {
-    return a.second.size() > b.second.size();
+    if (a.second.size() != b.second.size())
+        return a.second.size() > b.second.size();
+    
+    // If the sizes are equal, sort alphabetically
+    return a.first < b.first;
 }
-
 int main(int argc, char **argv)
 {   
 	if (argc < 4) {
@@ -203,7 +207,7 @@ int main(int argc, char **argv)
 	int file_index = 0;
 	vector<unordered_map<string, int>> maps;
 
-	unordered_map<string, set<int>> final_map;
+	map<string, set<int>> final_map;
 
 	for (int i = 0; i < mappers + reducers; i++) {
 		thread_args[i].mappers = mappers;
@@ -233,26 +237,39 @@ int main(int argc, char **argv)
 		}
 	}
 
-	// int i = 0;
-	// for (auto map : maps) {
-	// 	cout << i << endl;
-	// 	for (auto el : map) {
-	// 		cout << el.first << " " << el.second << endl;
+	int i = 0;
+	
+	// for (auto el : sorted_map) {
+	// 	cout << el.first;
+	// 	for (auto it : el.second) {
+	// 		cout << " " << it;
 	// 	}
-	// 	i++;
+	// 	cout << endl;
 	// }
 	vector<pair<string, set<int>>> sorted_map(final_map.begin(), final_map.end());
+
 
     sort(sorted_map.begin(), sorted_map.end(), compare_by_size);
 
 	for (auto el : sorted_map) {
-		cout << el.first << ", [";
+		// cout << el.first;
+		string filename = string(1, el.first[0]) + ".txt";
+		// cout << filename << endl;
+		ofstream fout(filename, ios::app);
+		fout << el.first << ":[";
+		int i = 0;
 		for (auto it : el.second) {
-			cout << it << " ";
+			// cout << " "<<it;
+			fout << it;
+			if (i != el.second.size() - 1)
+				fout << " ";
+			i++;
 		}
-		cout << "]" << endl;
+		fout << "]" << endl;
+		// cout << endl;
+		fout.close();
 	}
-	cout << *thread_args[0].file_index << endl;
+	// cout << *thread_args[0].file_index << endl;
 
 	pthread_mutex_destroy(&mutex);
 	pthread_barrier_destroy(&barrier);
