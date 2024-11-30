@@ -12,6 +12,9 @@
 
 using namespace std;
 
+
+
+
 struct thread_args_t {
 	vector<string> files;
 	int mappers;
@@ -19,7 +22,8 @@ struct thread_args_t {
 	vector<unordered_map<string, int>>* partial_maps;
 	pthread_mutex_t *mutex;
 	pthread_barrier_t *barrier;
-	map<string, set<int>>* final_map;
+	pthread_barrier_t *reducer_barrier;
+	vector<map<string, set<int>>>* final_map;
 	int *file_index;
 	int thread_id;
 };
@@ -48,15 +52,22 @@ void parse_input(char **argv, int &mappers, int &reducers, vector<string>& files
 	fin.close();
 }
 
+void trim(string& s) {
+    // Remove leading spaces
+    s.erase(s.begin(), find_if(s.begin(), s.end(), [](unsigned char ch) {
+        return !isspace(ch);
+    }));
+    // Remove trailing spaces
+    s.erase(find_if(s.rbegin(), s.rend(), [](unsigned char ch) {
+        return !isspace(ch);
+    }).base(), s.end());
+}
+
 void *map_function(void *args) {
 	thread_args_t* thread_args = (thread_args_t *)(args);
 
 	while(true) {
-		int ret = pthread_mutex_lock(thread_args->mutex);
-		if (ret) {
-			printf("error\n");
-			pthread_exit(NULL);
-		}
+		pthread_mutex_lock(thread_args->mutex);
 
 		if (*thread_args->file_index >= thread_args->files.size()) {
 			pthread_mutex_unlock(thread_args->mutex);
@@ -67,7 +78,7 @@ void *map_function(void *args) {
 		string file = thread_args->files[*thread_args->file_index];
 		(*thread_args->file_index)++;
 
-		// pthread_mutex_unlock(thread_args->mutex);
+		pthread_mutex_unlock(thread_args->mutex);
 
 		string word;
 		string filename = "../checker/" + file;
@@ -85,6 +96,11 @@ void *map_function(void *args) {
 		unordered_map<string, int> partial_map;
 		while (fin >> word)
 		{
+			trim(word);
+
+			if (word.empty())
+				continue;
+
 			for (auto& c : word)
 				c = tolower(c);
 
@@ -94,18 +110,19 @@ void *map_function(void *args) {
                              }),
                    word.end());
 			// cout << word << endl;
+			if (word.empty())
+				continue;
 			partial_map[word] = curr_file;
 		}
 
 		// for (auto el : partial_map) {
 		// 	cout << el.first << " " << el.second << endl;
 		// }
-
+		pthread_mutex_lock(thread_args->mutex);
 		thread_args->partial_maps->push_back(partial_map);
-		fin.close();
-
 		pthread_mutex_unlock(thread_args->mutex);
-
+		
+		fin.close();
 	}
 	// cout << "thread: " << thread_args->thread_id << endl;
 	// pthread_exit(NULL);
@@ -116,42 +133,100 @@ int min(int a, int b) {
 	return a <= b ? a : b;
 }
 
-void *reduce_function(void *args) {
-	thread_args_t* thread_args = (thread_args_t *)(args);
-	int i = 0;
-	// cout << "threadid : "<< thread_args->thread_id<<endl;
-	// for (auto map : *thread_args->partial_maps) {
-	// 	cout << i << endl;
-	// 	// cout << "Reducer " << thread_args->thread_id << " processing map " << i << endl;
+bool compare_by_size(pair<string, set<int>> a, pair<string, set<int>> b) {
+    if (a.second.size() != b.second.size()) {
+        return a.second.size() > b.second.size();
+    }
 
-	// 	for (auto el : map) {
-	// 		cout << el.first << " " << el.second << endl;
-	// 	}
-	// 	i++;
-	// }
-	int n = (*thread_args->partial_maps).size();
+    return a.first < b.first;
+}
+
+void *reduce_function(void *args) {
+    thread_args_t* thread_args = (thread_args_t *)(args);
+    cout << "aici\n";
+    // Calculul intervalului pentru acest thread
+    int n = (*thread_args->partial_maps).size();
 	int p = thread_args->reducers;
 	int start = (thread_args->thread_id - thread_args->mappers) * (double)n / p;
 	int end = min((thread_args->thread_id - thread_args->mappers + 1) * (double)n / p, n);
 
+    // Populare final_map
+    for (int i = start; i < end; i++) {
+		unordered_map<int, unordered_map<string, set<int>>> local_map;
 
-	for (int i = start; i < end; i++) {
-		// pthread_mutex_lock(thread_args->mutex);
-       	// 	cout << i << endl;
-		// pthread_mutex_unlock(thread_args->mutex);
-		// for (auto map : *thread_args->partial_maps) {
-		for (auto el : (*thread_args->partial_maps)[i]) {
-			 
-			pthread_mutex_lock(thread_args->mutex);
-       		(*thread_args->final_map)[el.first].insert(el.second);
-			pthread_mutex_unlock(thread_args->mutex);
-			// cout << el.first << endl;
+		for (auto& el : (*thread_args->partial_maps)[i]) {
+			char first_letter = el.first[0];
+			int index = first_letter - 'a';
+
+			if (local_map.find(index) == local_map.end()) {
+				local_map[index] = unordered_map<string, set<int>>();
+			}
+
+			local_map[index][el.first].insert(el.second);
 		}
+
+		pthread_mutex_lock(thread_args->mutex);
+
+		for (auto& kv : local_map) {
+			if ((*thread_args->final_map).size() <= kv.first) {
+				(*thread_args->final_map).resize(kv.first + 1);
+			}
+			
+			for (auto& sub_kv : kv.second) {
+				(*thread_args->final_map)[kv.first][sub_kv.first].insert(sub_kv.second.begin(), sub_kv.second.end());
+			}
+		}
+
+		pthread_mutex_unlock(thread_args->mutex);
 	}
 
-	// return 0;
-	pthread_exit(NULL);
+
+	cout << "mai jos????\n";
+    pthread_barrier_wait(thread_args->reducer_barrier);
+
+	
+    int num_maps = 26;
+	int new_start = (thread_args->thread_id - thread_args->mappers) * (double)num_maps / p;
+	
+	int new_end = min((thread_args->thread_id - thread_args->mappers + 1) * (double)num_maps / p, num_maps);
+	cout << new_start << " " << new_end << endl;
+    for (int i = new_start; i < new_end; i ++) {
+        auto& curr_map = (*thread_args->final_map)[i];
+
+        vector<pair<string, set<int>>> sorted_entries(curr_map.begin(), curr_map.end());
+
+		sort(sorted_entries.begin(), sorted_entries.end(), compare_by_size);
+
+		char letter = 'a' + i;
+        string filename = string(1, letter) + ".txt";
+
+        ofstream fout(filename, ios::app); 
+
+        for (const auto& el : sorted_entries) {
+            fout << el.first << ":[";
+            int count = 0;
+            for (const auto& num : el.second) {
+                fout << num;
+                if (count != el.second.size() - 1)
+                    fout << " ";
+                count++;
+            }
+            fout << "]" << endl;
+        }
+
+        fout.close();
+
+        // curr_map.clear();
+        // for (const auto& el : sorted_entries) {
+		// // for (int j = sorted_entries.size() - 1; j >= 0; j--) {
+        //     // curr_map[sorted_entries[j].first] = sorted_entries[j].second;
+        //     curr_map[el.first] = el.second;
+        // }
+    }
+
+    pthread_exit(NULL);
 }
+
 
 void *func(void *args) {
 	thread_args_t* thread_args = (thread_args_t *)(args);
@@ -162,6 +237,7 @@ void *func(void *args) {
 	}
 	
 	// cout << "thread: " << thread_args->thread_id << endl;
+	
 
 	pthread_barrier_wait(thread_args->barrier);
 
@@ -175,13 +251,6 @@ void *func(void *args) {
 	pthread_exit(NULL);
 }
 
-bool compare_by_size(pair<string, set<int>> a, pair<string, set<int>> b) {
-    if (a.second.size() != b.second.size())
-        return a.second.size() > b.second.size();
-    
-    // If the sizes are equal, sort alphabetically
-    return a.first < b.first;
-}
 int main(int argc, char **argv)
 {   
 	if (argc < 4) {
@@ -199,15 +268,19 @@ int main(int argc, char **argv)
 
 	pthread_mutex_t mutex;
 	pthread_barrier_t barrier;
+	pthread_barrier_t reducer_barrier;
+
 
 	pthread_mutex_init(&mutex, NULL);
 	pthread_barrier_init(&barrier, NULL, mappers + reducers);
+	pthread_barrier_init(&reducer_barrier, NULL, reducers);
+
 
 
 	int file_index = 0;
 	vector<unordered_map<string, int>> maps;
 
-	map<string, set<int>> final_map;
+	vector<map<string, set<int>>> final_map(26);
 
 	for (int i = 0; i < mappers + reducers; i++) {
 		thread_args[i].mappers = mappers;
@@ -216,6 +289,8 @@ int main(int argc, char **argv)
 		thread_args[i].file_index = &file_index;
 		thread_args[i].mutex = &mutex;
 		thread_args[i].barrier = &barrier;
+		thread_args[i].reducer_barrier = &reducer_barrier;
+
 		thread_args[i].partial_maps = &maps;
 		thread_args[i].thread_id = i;
 		thread_args[i].final_map = &final_map;
@@ -238,47 +313,35 @@ int main(int argc, char **argv)
 	}
 
 	int i = 0;
-	
-	// for (auto el : sorted_map) {
-	// 	cout << el.first;
-	// 	for (auto it : el.second) {
-	// 		cout << " " << it;
-	// 	}
-	// 	cout << endl;
+
+	// vector<pair<string, set<int>>> sorted_map(final_map.begin(), final_map.end());
+
+
+    // sort(sorted_map.begin(), sorted_map.end(), compare_by_size);
+
+	// for (int i = 0; i < 26; i++) {
+	// 	char letter = 'a' + i;  // Determine the corresponding letter
+	// 	string filename = string(1, letter) + ".txt";
+
+	// 	ofstream fout(filename, ios::app);  // Open file for appending
+
+	// 	for (const auto& el : final_map[i]) {
+	// 		fout << el.first << ":[";
+	// 		int count = 0;
+	// 		for (const auto& num : el.second) {
+	// 			fout << num;
+	// 			if (count != el.second.size() - 1)
+	// 				fout << " ";
+	// 			count++;
+	// 		}
+	// 		fout << "]" << endl;
+    // 	}
+
+    // 	fout.close();
 	// }
-	vector<pair<string, set<int>>> sorted_map(final_map.begin(), final_map.end());
-
-
-    sort(sorted_map.begin(), sorted_map.end(), compare_by_size);
-
-	for (auto el : sorted_map) {
-		// cout << el.first;
-		string filename = string(1, el.first[0]) + ".txt";
-		// cout << filename << endl;
-		ofstream fout(filename, ios::app);
-		fout << el.first << ":[";
-		int i = 0;
-		for (auto it : el.second) {
-			// cout << " "<<it;
-			fout << it;
-			if (i != el.second.size() - 1)
-				fout << " ";
-			i++;
-		}
-		fout << "]" << endl;
-		// cout << endl;
-		fout.close();
-	}
-	// cout << *thread_args[0].file_index << endl;
 
 	pthread_mutex_destroy(&mutex);
 	pthread_barrier_destroy(&barrier);
-
-
-	// cout << mappers << " " << reducers << endl;
-	// for (auto file : files)
-	//     cout << file << endl;
-   
 
 	return 0;
 }
