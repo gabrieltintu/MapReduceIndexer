@@ -1,4 +1,4 @@
-### Gabriel-Claudiu TINTU
+### © 2024 Gabriel-Claudiu TINTU
 
 # Inverted Index using the Map-Reduce Paradigm
 
